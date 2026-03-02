@@ -1,0 +1,222 @@
+================================================================================
+PAYOUT DOMAIN - SCOPE & RESPONSIBILITY
+================================================================================
+
+DOMAIN PURPOSE
+================================================================================
+
+The Payout Domain manages money movement from the platform to makers (earnings calculation, commission deduction, payout schedules). This domain handles maker earnings, balances, and payout processing.
+
+================================================================================
+WHAT THIS DOMAIN OWNS
+================================================================================
+
+1. Maker Balances
+   - Maker balance records
+   - Pending earnings
+   - Available balance
+   - Total earnings
+   - Payout history
+
+2. Earnings
+   - Earnings records from completed orders
+   - Earnings amounts
+   - Commission deductions
+   - Net earnings
+   - Earnings timestamps
+
+3. Payouts
+   - Payout records
+   - Payout amounts
+   - Payout methods
+   - Payout status (PENDING, PROCESSING, COMPLETED, FAILED)
+   - Payout timestamps
+
+4. Payout State Machine
+   - Payout status transitions
+   - State machine rules
+   - Status validation
+
+================================================================================
+WHAT THIS DOMAIN IS RESPONSIBLE FOR
+================================================================================
+
+1. Earnings Calculation
+   - Calculating earnings from completed orders
+   - Deducting platform commission
+   - Accruing earnings to maker balances
+   - Tracking earnings history
+
+2. Balance Management
+   - Maintaining maker balances
+   - Tracking pending earnings
+   - Tracking available balance
+   - Updating balances on payouts
+
+3. Payout Processing
+   - Creating payouts for makers
+   - Processing payouts (transferring funds)
+   - Handling payout failures
+   - Tracking payout status
+
+4. Payout Scheduling
+   - Scheduling automatic payouts
+   - Processing batch payouts
+   - Managing payout schedules
+   - Handling scheduled payout processing
+
+5. Commission Management
+   - Calculating platform commission
+   - Applying commission rules
+   - Tracking commission deductions
+   - Supporting commission configuration
+
+6. Event Publishing
+   - Publishing EarningsAccrued events
+   - Publishing PayoutScheduled events
+   - Publishing PayoutCompleted events
+   - Publishing PayoutFailed events
+
+================================================================================
+WHAT THIS DOMAIN DOES NOT OWN
+================================================================================
+
+1. Orders
+   - Order data (Order Domain)
+   - Order management (Order Domain)
+   - Order status (Order Domain)
+
+2. Payments
+   - Payment processing (Payment Domain)
+   - Payment data (Payment Domain)
+   - Refund processing (Payment Domain)
+
+3. Maker Profiles
+   - Maker profile data (Maker Domain)
+   - Maker verification (Verification Trust Domain)
+
+4. Notifications
+   - Notification delivery (Notification Domain)
+   - Notification preferences (Notification Domain)
+
+5. Payout Publisher Infrastructure
+   - Payout publisher accounts (external)
+   - Payout publisher APIs (external)
+   - Bank accounts (external)
+
+================================================================================
+DOMAIN BOUNDARIES
+================================================================================
+
+1. Input Boundaries
+   - Receives payout creation requests
+   - Receives balance queries
+   - Receives earnings queries
+   - Consumes OrderPaid, OrderCompleted events (for earnings calculation)
+   - Consumes PaymentCaptured, PaymentRefunded events (for earnings validation/adjustment)
+   - Imports orders table via SSM (for earnings calculation)
+   - Does NOT receive order data directly (reads via imported table)
+
+2. Output Boundaries
+   - Provides balance data
+   - Provides earnings data
+   - Provides payout data
+   - Publishes payout events
+   - Does NOT provide order data
+   - Does NOT provide payment data
+
+3. Data Boundaries
+   - Owns:
+      - `payouts` table (per-maker payout requests and status)
+      - `settlements` table (finalized settlement records)
+      - `payout_ledger` (historical payout posting records)
+   - Does NOT own:
+      - Raw payment transaction data (Payment Domain)
+      - Order data (Order Domain)
+   - Integration Notes:
+      - Consumes `OrderPaid`/`OrderCompleted`, and `PaymentCaptured` events to calculate earnings and schedule payouts.
+      - Imports `orders` table name via SSM for read-only calculations where required; prefer event-driven reconciliation.
+
+4. Integration Boundaries
+   - Consumes payment settlement and payout-ready events from Payment Domain
+   - Publishes payout status events for Notification and Accounting systems
+   - Integrates with external payout publishers (bank APIs, Stripe Connect)
+   - Does NOT write to other domains' databases
+   - Publishes events for Notification Domain
+   - Publishes events for Maker Domain (optional)
+   - Integrates with external payout publishers
+   - Does NOT directly access other domain databases (except read-only orders table)
+
+================================================================================
+KEY RESPONSIBILITIES
+================================================================================
+
+1. Calculate Earnings
+   - Calculate earnings from completed orders
+   - Apply commission rules
+   - Accrue earnings to balances
+   - Track earnings history
+
+2. Process Payouts
+   - Create payouts accurately
+   - Process payouts reliably
+   - Handle payout failures
+   - Support multiple payout methods
+
+3. Manage Balances
+   - Maintain accurate balances
+   - Track pending and available balances
+   - Update balances on earnings and payouts
+   - Support balance queries
+
+4. Support Payout Scheduling
+   - Enable scheduled payouts
+   - Process batch payouts
+   - Handle payout schedules
+   - Support payout automation
+
+================================================================================
+CROSS-DOMAIN DEPENDENCIES
+================================================================================
+
+This Domain Provides To:
+- Notification Domain: EarningsAccrued, PayoutScheduled, PayoutCompleted, PayoutFailed events
+- Maker Domain: EarningsAccrued, PayoutCompleted events (optional, for balance display)
+
+This Domain Consumes From:
+- Order Domain: OrderPaid, OrderCompleted events (for earnings calculation), orders table (via SSM)
+- Payment Domain: PaymentCaptured, PaymentRefunded events (for earnings validation/adjustment)
+
+================================================================================
+TECHNICAL SCOPE
+================================================================================
+
+Technologies:
+- DynamoDB (maker_balances, earnings, payouts)
+- REST API (API Gateway)
+- Lambda functions for earnings and payout processing
+- Step Functions (state machine for payout workflow)
+- CloudWatch Events (for scheduled payouts)
+- SSM Parameters for importing orders table name
+- External payout publisher integration
+
+Data Storage:
+- maker_balances table
+- earnings table
+- payouts table
+- orders table (read-only, imported via SSM)
+
+API Type:
+- REST API (API Gateway)
+
+Event Communication:
+- EventBridge for publishing and consuming events
+- SSM Parameters for importing orders table name
+
+External Integrations:
+- Payout publishers (bank transfers, PayPal, etc.)
+- Scheduled payout processing
+
+================================================================================
+END OF DOCUMENTATION
+================================================================================

@@ -1,0 +1,204 @@
+================================================================================
+PAYOUT DOMAIN - WORKFLOW DOCUMENTATION
+================================================================================
+
+1. WORKFLOW
+================================================================================
+
+The Payout Domain manages money movement from the platform to makers (earnings calculation, commission deduction, payout schedules).
+
+Main Workflows:
+
+1. Earnings Calculation
+   - Calculate earnings from completed orders
+   - Deduct platform commission
+   - Accrue earnings to maker balance
+   - Earnings calculated asynchronously from orders
+
+2. Maker Balance Management
+   - Get maker balance
+   - Balance includes pending earnings and available balance
+   - Balance updated when earnings accrue and payouts process
+
+3. Payout Creation
+   - Create payout for maker
+   - Payout amount from available balance
+   - Payout scheduled for processing
+
+4. Payout Processing
+   - Process payout (transfer funds to maker)
+   - Update maker balance
+   - Track payout status
+   - Handle payout failures
+
+5. Payout Scheduling
+   - Scheduled payouts (daily, weekly, monthly)
+   - Automatic payout processing
+   - Batch payout processing
+
+6. Earnings History
+   - List earnings for maker
+   - Earnings from completed orders
+   - Earnings include commission breakdown
+
+================================================================================
+2. OPERATIONS TYPE
+================================================================================
+
+Operation Types:
+- Earnings Operations: Calculate earnings, list earnings
+- Balance Operations: Get maker balance
+- Payout Operations: Create payout, process payout, list payouts
+- Scheduling Operations: Schedule payouts (event-driven)
+
+API Type: REST API (API Gateway)
+
+================================================================================
+3. OUTPUT OF EACH OPERATION (NO CODE, JUST DESCRIPTION)
+================================================================================
+
+3.1 Calculate Earnings Operation (Event-Driven)
+   Input: Order data from OrderCompleted event
+   Process:
+     - Retrieves order details from orders table (imported via SSM)
+     - Calculates earnings (order amount - commission)
+     - Creates earnings record in earnings table
+     - Updates maker balance (increments pending_earnings)
+     - Sets calculated_at timestamp
+   Output:
+     - Success: Earnings record with earnings_id, maker_user_id, order_id, amount, commission, net_amount, calculated_at
+     - Error: Order not found, calculation failure
+
+3.2 Get Maker Balance Operation
+   Input: Maker user ID
+   Process:
+     - Retrieves maker balance from maker_balances table
+     - Returns balance with pending and available amounts
+   Output:
+     - Success: Balance object with maker_user_id, pending_earnings, available_balance, total_earnings, last_payout_at
+     - Error: Balance not found (creates default balance)
+
+3.3 List Earnings Operation
+   Input: Maker user ID, pagination parameters
+   Process:
+     - Queries earnings table by maker_user_id
+     - Returns paginated list of earnings
+     - Sorted by calculated_at (newest first)
+   Output:
+     - Success: List of earnings with earnings_id, order_id, amount, commission, net_amount, calculated_at, pagination info
+     - Error: Invalid pagination parameters
+
+3.4 Create Payout Operation
+   Input: Maker user ID, payout amount, payout method
+   Process:
+     - Validates maker balance has sufficient available balance
+     - Creates payout record in payouts table
+     - Sets status to PENDING
+     - Reserves amount from available balance
+     - Triggers state machine for payout workflow
+   Output:
+     - Success: Payout object with payout_id, maker_user_id, amount, payout_method, status (PENDING), created_at
+     - Error: Insufficient balance, invalid payout method, validation errors
+
+3.5 Process Payout Operation
+   Input: Payout ID
+   Process:
+     - Validates payout is in PENDING status
+     - Calls payout publisher (bank transfer, PayPal, etc.)
+     - Transfers funds to maker
+     - Updates payout status to PROCESSING
+     - On success: Updates status to COMPLETED, updates maker balance (decrements available_balance)
+     - On failure: Updates status to FAILED, restores balance
+     - Sets processed_at timestamp
+     - Triggers state machine
+   Output:
+     - Success: Updated payout object with status (COMPLETED or FAILED), processed_at, transaction_id
+     - Error: Payout not found, payout already processed, processing failure
+
+3.6 List Payouts Operation
+   Input: Maker user ID, status filter (optional), pagination parameters
+   Process:
+     - Queries payouts table by maker_user_id
+     - Applies status filter if provided
+     - Returns paginated list of payouts
+   Output:
+     - Success: List of payouts with payout_id, amount, payout_method, status, created_at, processed_at, pagination info
+     - Error: Invalid filters, invalid pagination parameters
+
+3.7 Schedule Payouts Operation (Event-Driven, Scheduled)
+   Input: Scheduled trigger (daily cron)
+   Process:
+     - Queries makers with available balance above threshold
+     - Creates payouts for eligible makers
+     - Processes payouts in batch
+   Output:
+     - Success: Batch payout processing confirmation with count of payouts created
+     - Error: Scheduling failure
+
+================================================================================
+4. GENERATED EVENTS - WHO, HOW TO BE COMMUNICATED WITH WHICH OTHER DOMAIN
+================================================================================
+
+Events Published:
+- EarningsAccrued: Published when earnings are calculated and added to balance
+  - Who: Payout Domain
+  - How: EventBridge event bus
+  - Communicated with: Notification Domain, Maker Domain
+  - Purpose: Notify maker of earnings, update maker profile
+  - Event Data: earnings_id, maker_user_id, order_id, net_amount, accrued_at
+
+- PayoutScheduled: Published when payout is created
+  - Who: Payout Domain
+  - How: EventBridge event bus
+  - Communicated with: Notification Domain
+  - Purpose: Notify maker that payout is scheduled
+  - Event Data: payout_id, maker_user_id, amount, scheduled_at
+
+- PayoutCompleted: Published when payout is successfully processed
+  - Who: Payout Domain
+  - How: EventBridge event bus
+  - Communicated with: Notification Domain, Maker Domain
+  - Purpose: Notify maker of payout completion, update maker balance display
+  - Event Data: payout_id, maker_user_id, amount, transaction_id, completed_at
+
+- PayoutFailed: Published when payout processing fails
+  - Who: Payout Domain
+  - How: EventBridge event bus
+  - Communicated with: Notification Domain, Alerting System
+  - Purpose: Notify maker of failure, alert operations team
+  - Event Data: payout_id, maker_user_id, failure_reason, failed_at
+
+Events Consumed:
+- OrderPaid: From Order Domain
+  - Purpose: Start tracking order for earnings calculation
+  - Action: Mark order as eligible for earnings (optional, may wait for completion)
+
+- OrderCompleted: From Order Domain
+  - Purpose: Calculate earnings from completed order
+  - Action: Calculate earnings, create earnings record, update maker balance
+
+- PaymentCaptured: From Payment Domain
+  - Purpose: Confirm payment for earnings calculation
+  - Action: Validate payment before calculating earnings
+
+- PaymentRefunded: From Payment Domain
+  - Purpose: Reverse earnings if payment is refunded
+  - Action: Reverse earnings, update maker balance, mark earnings as reversed
+
+Cross-Domain Communication:
+- Order Domain: Publishes OrderPaid, OrderCompleted events that payout domain consumes; imports orders table via SSM for direct reads
+- Payment Domain: Publishes PaymentCaptured, PaymentRefunded events that payout domain consumes
+- Notification Domain: Receives EarningsAccrued, PayoutScheduled, PayoutCompleted, PayoutFailed events to send notifications
+- Maker Domain: Receives EarningsAccrued, PayoutCompleted events to update maker balance display (if cached)
+
+Communication Method:
+- EventBridge: Primary method for asynchronous event communication
+- REST API (API Gateway): Direct API calls from frontend
+- Step Functions: State machine for payout workflow
+- SSM Parameters: Imports orders table name from order-domain for earnings calculation
+- DynamoDB: Direct read access to orders table (imported via SSM) for earnings calculation
+- Scheduled Events: CloudWatch Events for scheduled payout processing
+
+================================================================================
+END OF DOCUMENTATION
+================================================================================

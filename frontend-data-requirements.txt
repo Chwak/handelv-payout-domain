@@ -1,0 +1,56 @@
+# Payout Domain - Frontend Data Requirements
+
+## Overview
+All data that the Payout Domain captures from frontend interactions.
+
+**Domain:** Payout Domain
+**Purpose:** Earnings and payouts from platform to makers
+**Last Updated:** 2026-01-31
+
+---
+
+## 1. PAYOUT MANAGEMENT
+
+### 1.1 Request Payout
+**Endpoint**: `POST /payouts/request`
+**Source**: Maker dashboard (maker only)
+
+```typescript
+{
+  amount: number,                       // Amount to withdraw
+  payoutMethodId: string,               // Bank account or PayPal
+}
+```
+
+**Validation**: Amount ≤ available balance
+
+### 1.2 Get Balance
+**Endpoint**: `GET /payouts/balance`
+**Source**: Maker dashboard
+
+**Response**:
+```typescript
+{
+  availableBalance: number,
+  pendingBalance: number,
+  totalEarned: number,
+  totalPaidOut: number,
+}
+```
+
+### 1.3 Get Earnings History
+**Endpoint**: `GET /payouts/earnings`
+**Source**: Maker dashboard
+
+---
+
+## API Endpoints
+
+- `GET /payouts/balance` - Get maker balance
+- `GET /payouts/earnings` - List earnings transactions
+- `GET /payouts/history` - List payout history
+- `POST /payouts/request` - Request payout
+
+---
+
+**Note:** See `inter-domain-data-requirements.txt` for events.

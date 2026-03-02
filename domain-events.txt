@@ -1,0 +1,82 @@
+================================================================================
+PAYOUT DOMAIN - EVENT CATALOG
+================================================================================
+Domain: payout-domain
+Event Source: hand-made.payout-domain
+Last Updated: 2026-02-16
+
+================================================================================
+PRODUCED EVENTS
+================================================================================
+
+Event: payout.calculated.v1
+Status: 🔲 PLANNED
+--------------------------------------------------------------------------------
+Description:
+  Published when earnings are calculated for a maker.
+
+Trigger: TBD
+Republish Lambda: TBD
+Payload Schema: TBD
+Consumers: notification-domain
+
+--------------------------------------------------------------------------------
+
+Event: payout.initiated.v1
+Status: 🔲 PLANNED
+--------------------------------------------------------------------------------
+Description:
+  Published when payout transfer is initiated to maker's account.
+
+Trigger: TBD
+Republish Lambda: TBD
+Payload Schema: TBD
+Consumers: notification-domain
+
+--------------------------------------------------------------------------------
+
+Event: payout.completed.v1
+Status: 🔲 PLANNED
+--------------------------------------------------------------------------------
+Description:
+  Published when payout successfully transfers to maker.
+
+Trigger: TBD
+Republish Lambda: TBD
+Payload Schema: TBD
+Consumers: notification-domain, maker-domain
+
+--------------------------------------------------------------------------------
+
+Event: payout.failed.v1
+Status: 🔲 PLANNED
+--------------------------------------------------------------------------------
+Description:
+  Published when payout transfer fails.
+
+Trigger: TBD
+Republish Lambda: TBD
+Payload Schema: TBD
+Consumers: notification-domain, maker-domain
+
+================================================================================
+CONSUMED EVENTS
+================================================================================
+
+Event: order.completed.v1
+Source: hand-made.order-domain
+Status: 🔲 PLANNED
+--------------------------------------------------------------------------------
+Handler Lambda: TBD
+Action: Calculate maker earnings, platform fees, taxes
+
+--------------------------------------------------------------------------------
+
+Event: payment.captured.v1
+Source: hand-made.payment-domain
+Status: 🔲 PLANNED
+--------------------------------------------------------------------------------
+Handler Lambda: TBD
+Action: Confirm funds available for future payout
+
+================================================================================

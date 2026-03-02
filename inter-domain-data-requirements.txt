@@ -1,0 +1,107 @@
+# Payout Domain - Inter-Domain Data Requirements
+
+## Overview
+All data consumed from and provided to other domains.
+
+**Domain:** Payout Domain  
+**Last Updated:** 2026-01-31
+
+---
+
+## 1. EVENTS CONSUMED
+
+### 1.1 From Order Domain
+**Event**: `OrderCompleted`
+
+```typescript
+{
+  event: "OrderCompleted",
+  orderId: string,
+  makerUserId: string,
+  totalAmount: number,
+  completedAt: string,
+}
+```
+
+**Action**: Create earnings transaction
+- Calculate platform fee (e.g., 10%)
+- Create earnings with hold period (e.g., 7 days)
+- Update maker balance
+
+---
+
+## 2. EVENTS EMITTED
+
+### 2.1 `EarningsAccrued`
+**Consumers**: Maker, Notification
+
+```typescript
+{
+  event: "EarningsAccrued",
+  makerUserId: string,
+  transactionId: string,
+  orderId: string,
+  netAmount: number,
+  availableAt: string,                  // After hold period
+}
+```
+
+### 2.2 `PayoutScheduled`
+**Consumers**: Notification
+
+```typescript
+{
+  event: "PayoutScheduled",
+  makerUserId: string,
+  payoutId: string,
+  amount: number,
+  scheduledFor: string,
+}
+```
+
+### 2.3 `PayoutCompleted`
+**Consumers**: Maker, Notification
+
+```typescript
+{
+  event: "PayoutCompleted",
+  makerUserId: string,
+  payoutId: string,
+  amount: number,
+  processedAt: string,
+}
+```
+
+### 2.4 `PayoutFailed`
+**Consumers**: Maker, Notification
+
+```typescript
+{
+  event: "PayoutFailed",
+  makerUserId: string,
+  payoutId: string,
+  failureReason: string,
+  failedAt: string,
+}
+```
+
+---
+
+## DEPENDENCY MAP
+
+```
+Payout Domain:
+├── Consumes From:
+│   └── Order Domain
+│       └── OrderCompleted
+└── Provides To:
+    ├── Maker Domain
+    │   ├── EarningsAccrued
+    │   ├── PayoutCompleted
+    │   └── PayoutFailed
+    └── Notification Domain
+        ├── EarningsAccrued
+        ├── PayoutScheduled
+        ├── PayoutCompleted
+        └── PayoutFailed
+```

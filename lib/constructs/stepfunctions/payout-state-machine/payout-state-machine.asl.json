@@ -1,0 +1,335 @@
+{
+  "Comment": "Payout Domain State Machine - Handles earnings calculation and payout processing",
+  "StartAt": "RoutePayoutAction",
+  "States": {
+    "RoutePayoutAction": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.action",
+          "StringEquals": "calculateEarnings",
+          "Next": "CalculateEarnings"
+        },
+        {
+          "Variable": "$.action",
+          "StringEquals": "processPayout",
+          "Next": "ProcessPayout"
+        },
+        {
+          "Variable": "$.action",
+          "StringEquals": "schedulePayouts",
+          "Next": "SchedulePayouts"
+        }
+      ],
+      "Default": "InvalidPayoutAction"
+    },
+    "InvalidPayoutAction": {
+      "Type": "Fail",
+      "Error": "InvalidPayoutAction",
+      "Cause": "Action must be calculateEarnings, processPayout, or schedulePayouts"
+    },
+    "CalculateEarnings": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:getItem",
+      "Parameters": {
+        "TableName": "${OrdersTableName}",
+        "Key": {
+          "orderId": {
+            "S.$": "$.orderId"
+          }
+        }
+      },
+      "ResultPath": "$.orderData",
+      "Next": "ValidateOrderForEarnings"
+    },
+    "ValidateOrderForEarnings": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.orderData.Item.status.S",
+          "StringEquals": "COMPLETED",
+          "Next": "CalculateGrossAmount"
+        }
+      ],
+      "Default": "OrderNotCompleted"
+    },
+    "OrderNotCompleted": {
+      "Type": "Fail",
+      "Error": "OrderNotCompleted",
+      "Cause": "Order must be COMPLETED to calculate earnings"
+    },
+    "CalculateGrossAmount": {
+      "Type": "Pass",
+      "Parameters": {
+        "orderId.$": "$.orderId",
+        "makerUserId.$": "$.makerUserId",
+        "grossAmount.$": "$.orderData.Item.totalAmount.N",
+        "platformFeePercent.$": "$.platformFeePercent"
+      },
+      "Next": "CalculateNetAmount"
+    },
+    "CalculateNetAmount": {
+      "Type": "Pass",
+      "Parameters": {
+        "orderId.$": "$.orderId",
+        "makerUserId.$": "$.makerUserId",
+        "grossAmount.$": "$.orderData.Item.totalAmount.N",
+        "platformFeePercent.$": "$.platformFeePercent",
+        "platformFee.$": "$.platformFee",
+        "netAmount.$": "$.netAmount"
+      },
+      "ResultPath": "$.calculation",
+      "Next": "CreateEarningsTransaction"
+    },
+    "CreateEarningsTransaction": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:putItem",
+      "Parameters": {
+        "TableName": "${EarningsTableName}",
+        "Item": {
+          "makerUserId": {
+            "S.$": "$.makerUserId"
+          },
+          "transactionId": {
+            "S.$": "$.transactionId"
+          },
+          "orderId": {
+            "S.$": "$.orderId"
+          },
+          "grossAmount": {
+            "N.$": "$.calculation.grossAmount"
+          },
+          "platformFee": {
+            "N.$": "$.calculation.platformFee"
+          },
+          "netAmount": {
+            "N.$": "$.calculation.netAmount"
+          },
+          "status": {
+            "S": "PENDING"
+          },
+          "availableAt": {
+            "S.$": "$.availableAt"
+          },
+          "createdAt": {
+            "S.$": "$$.State.EnteredTime"
+          }
+        }
+      },
+      "ResultPath": "$.earningsResult",
+      "Next": "UpdateMakerBalance"
+    },
+    "UpdateMakerBalance": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:updateItem",
+      "Parameters": {
+        "TableName": "${MakerBalancesTableName}",
+        "Key": {
+          "makerUserId": {
+            "S.$": "$.makerUserId"
+          }
+        },
+        "UpdateExpression": "ADD pendingBalance :netAmount, totalEarned :netAmount",
+        "ExpressionAttributeValues": {
+          ":netAmount": {
+            "N.$": "$.calculation.netAmount"
+          }
+        }
+      },
+      "Next": "EarningsCalculationSuccess"
+    },
+    "EarningsCalculationSuccess": {
+      "Type": "Succeed"
+    },
+    "ProcessPayout": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:getItem",
+      "Parameters": {
+        "TableName": "${MakerBalancesTableName}",
+        "Key": {
+          "makerUserId": {
+            "S.$": "$.makerUserId"
+          }
+        }
+      },
+      "ResultPath": "$.balanceData",
+      "Next": "ValidatePayoutAmount"
+    },
+    "ValidatePayoutAmount": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "And": [
+            {
+              "Variable": "$.balanceData.Item.availableBalance.N",
+              "NumericGreaterThanEqualsPath": "$.payoutAmount"
+            },
+            {
+              "Variable": "$.payoutAmount",
+              "NumericGreaterThan": 0
+            }
+          ],
+          "Next": "CreatePayoutRecord"
+        }
+      ],
+      "Default": "InsufficientBalance"
+    },
+    "InsufficientBalance": {
+      "Type": "Fail",
+      "Error": "InsufficientBalance",
+      "Cause": "Available balance is insufficient for payout amount"
+    },
+    "CreatePayoutRecord": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:putItem",
+      "Parameters": {
+        "TableName": "${PayoutsTableName}",
+        "Item": {
+          "payoutId": {
+            "S.$": "$.payoutId"
+          },
+          "makerUserId": {
+            "S.$": "$.makerUserId"
+          },
+          "amount": {
+            "N.$": "$.payoutAmount"
+          },
+          "status": {
+            "S": "PROCESSING"
+          },
+          "payoutMethod": {
+            "S.$": "$.payoutMethod"
+          },
+          "createdAt": {
+            "S.$": "$$.State.EnteredTime"
+          }
+        }
+      },
+      "ResultPath": "$.payoutResult",
+      "Next": "UpdateBalanceForPayout"
+    },
+    "UpdateBalanceForPayout": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:updateItem",
+      "Parameters": {
+        "TableName": "${MakerBalancesTableName}",
+        "Key": {
+          "makerUserId": {
+            "S.$": "$.makerUserId"
+          }
+        },
+        "UpdateExpression": "ADD availableBalance :negativeAmount, totalPaidOut :payoutAmount",
+        "ExpressionAttributeValues": {
+          ":negativeAmount": {
+            "N.$": "$.negativeAmount"
+          },
+          ":payoutAmount": {
+            "N.$": "$.payoutAmount"
+          }
+        }
+      },
+      "Next": "UpdatePayoutToCompleted"
+    },
+    "UpdatePayoutToCompleted": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:updateItem",
+      "Parameters": {
+        "TableName": "${PayoutsTableName}",
+        "Key": {
+          "payoutId": {
+            "S.$": "$.payoutId"
+          }
+        },
+        "UpdateExpression": "SET #status = :status, completedAt = :completedAt, publisherPayoutId = :publisherPayoutId, updatedAt = :updatedAt",
+        "ExpressionAttributeNames": {
+          "#status": "status"
+        },
+        "ExpressionAttributeValues": {
+          ":status": {
+            "S": "COMPLETED"
+          },
+          ":completedAt": {
+            "S.$": "$$.State.EnteredTime"
+          },
+          ":publisherPayoutId": {
+            "S.$": "$.publisherPayoutId"
+          },
+          ":updatedAt": {
+            "S.$": "$$.State.EnteredTime"
+          }
+        }
+      },
+      "Next": "PayoutSuccess"
+    },
+    "PayoutSuccess": {
+      "Type": "Succeed"
+    },
+    "SchedulePayouts": {
+      "Type": "Map",
+      "ItemsPath": "$.makers",
+      "MaxConcurrency": 10,
+      "Iterator": {
+        "StartAt": "CheckMinimumPayout",
+        "States": {
+          "CheckMinimumPayout": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::dynamodb:getItem",
+            "Parameters": {
+              "TableName": "${MakerBalancesTableName}",
+              "Key": {
+                "makerUserId": {
+                  "S.$": "$.makerUserId"
+                }
+              }
+            },
+            "ResultPath": "$.balanceData",
+            "Next": "ValidateMinimumThreshold"
+          },
+          "ValidateMinimumThreshold": {
+            "Type": "Choice",
+            "Choices": [
+              {
+                "Variable": "$.balanceData.Item.availableBalance.N",
+                "NumericGreaterThanEquals": 10,
+                "Next": "CreateScheduledPayout"
+              }
+            ],
+            "Default": "SkipPayout"
+          },
+          "CreateScheduledPayout": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::dynamodb:putItem",
+            "Parameters": {
+              "TableName": "${PayoutsTableName}",
+              "Item": {
+                "payoutId": {
+                  "S.$": "$.payoutId"
+                },
+                "makerUserId": {
+                  "S.$": "$.makerUserId"
+                },
+                "amount": {
+                  "N.$": "$.balanceData.Item.availableBalance.N"
+                },
+                "status": {
+                  "S": "SCHEDULED"
+                },
+                "scheduledAt": {
+                  "S.$": "$$.State.EnteredTime"
+                }
+              }
+            },
+            "End": true
+          },
+          "SkipPayout": {
+            "Type": "Succeed"
+          }
+        }
+      },
+      "Next": "SchedulePayoutsSuccess"
+    },
+    "SchedulePayoutsSuccess": {
+      "Type": "Succeed"
+    }
+  }
+}

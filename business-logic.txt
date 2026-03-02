@@ -1,0 +1,248 @@
+# Payout Domain - Business Logic
+
+## Domain Purpose
+The Payout Domain manages money movement from platform to maker (earnings, commissions, payouts). This domain handles all maker payment operations.
+
+## Data Layer Ownership
+The Payout Domain owns and manages the following DynamoDB tables:
+- maker_balances: Maker account balances
+- payouts: Payout records
+- earnings_transactions: Individual earnings from orders
+
+## Business Rules
+
+### 1. Earnings Calculation
+- Earnings are calculated when orders are completed
+- Gross amount = order total
+- Platform fee is deducted (percentage or fixed)
+- Net amount = gross - platform fee
+- Earnings start in "pending" status
+
+### 2. Balance Management
+- Available balance = earnings available for payout
+- Pending balance = earnings in escrow/hold
+- Total earned = lifetime earnings
+- Total paid out = lifetime payouts
+- Balances are updated atomically
+
+### 3. Payout Scheduling
+- Payouts can be scheduled or immediate
+- Minimum payout threshold may apply
+- Payout frequency is configurable (weekly, bi-weekly, monthly)
+- Scheduled payouts are processed in batches
+- Payout status: pending -> processing -> completed -> failed
+
+### 4. Payout Methods
+- Makers must configure payout method (bank transfer, PayPal, etc.)
+- Payout account must be verified
+- Payout account_id references maker's payout account
+- Payout methods are validated before processing
+
+### 5. Commission Rules
+- Platform fee percentage is configurable
+- Commission is calculated at order completion
+- Commission rules can vary by maker tier
+- Commission is deducted before earnings are available
+
+### 6. Escrow and Hold Periods
+- Earnings may be held in escrow for a period
+- Hold period protects against disputes
+- Available_at timestamp determines when earnings become available
+- Hold periods are configurable per order type
+
+### 7. Payout Processing
+- Payouts are processed through payment publisher
+- Publisher_payout_id links to external publisher
+- Failed payouts are retried
+- Payout failures are logged and notified
+
+## Data Layer Interactions
+
+### Read Operations
+- Read maker balance by maker_user_id
+- Read payouts by maker_user_id
+- Read payouts by status
+- Read earnings transactions by maker_user_id
+- Read earnings by order_id
+- Read available earnings by status
+
+### Write Operations
+- Create earnings transaction
+- Update earnings status
+- Update maker balance
+- Create payout
+- Update payout status
+- Process payout
+
+### Data Integrity Rules
+- Earnings must reference valid order_id from Order Domain
+- Earnings must reference valid maker_user_id from Maker Domain
+- Payouts must reference valid maker_user_id
+- Balance updates must be atomic
+- Payout amount cannot exceed available balance
+- Earnings status transitions must be valid
+
+## Event-Driven Communication
+
+### Events Published
+- EarningsAccrued: When earnings are calculated from completed order
+- EarningsAvailable: When earnings become available for payout
+- PayoutScheduled: When a payout is scheduled
+- PayoutProcessing: When payout processing starts
+- PayoutCompleted: When payout is successfully processed
+- PayoutFailed: When payout processing fails
+- BalanceUpdated: When maker balance changes
+
+### Events Consumed
+- OrderCompleted: From Order Domain - triggers earnings calculation
+- PaymentCaptured: From Payment Domain - confirms funds received
+- MakerVerified: From Maker Domain - may affect payout eligibility
+
+## Cross-Domain Boundaries
+
+### What This Domain Owns
+- Maker balances
+- Earnings calculations
+- Payout records
+- Commission rules
+- Payout processing
+
+### What This Domain Does NOT Own
+- Order lifecycle (Order Domain)
+- Collector payments (Payment Domain)
+- Maker profiles (Maker Domain)
+- User authentication (Identity Domain)
+
+## Business Logic Constraints
+1. Earnings cannot be created without completed order
+2. Platform fee must be calculated correctly
+3. Available balance cannot be negative
+4. Payout amount cannot exceed available balance
+5. Earnings must go through hold period before availability
+6. Payout status can only move forward (except failures)
+7. Balance updates must be atomic and consistent
+8. Failed payouts must be retried with backoff
+
+## Domain Structure & Implementation
+
+### Directory Structure
+The Payout Domain follows a structure similar to `/Users/jred/AWS/aedcor-backend/support_backend/lib`:
+
+```
+lib/
+├── constructs/
+│   ├── dynamodb/
+│   │   └── payout-tables/
+│   │       └── payout-tables-construct.ts
+│   ├── lambda/
+│   │   └── payout/
+│   │       ├── calculate-earnings/
+│   │       ├── create-payout/
+│   │       ├── process-payout/
+│   │       ├── get-maker-balance/
+│   │       ├── list-payouts/
+│   │       ├── list-earnings/
+│   │       ├── schedule-payouts/
+│   │       └── event-consumer/
+│   └── appsync/
+│       └── payout-appsync/
+│           └── payout-appsync-construct.ts
+├── functions/
+│   ├── lambda/
+│   │   └── payout/
+│   │       ├── calculate-earnings/
+│   │       │   └── calculate-earnings-lambda.js
+│   │       ├── create-payout/
+│   │       │   └── create-payout-lambda.js
+│   │       ├── process-payout/
+│   │       │   └── process-payout-lambda.js
+│   │       ├── get-maker-balance/
+│   │       │   └── get-maker-balance-lambda.js
+│   │       ├── list-payouts/
+│   │       │   └── list-payouts-lambda.js
+│   │       ├── list-earnings/
+│   │       │   └── list-earnings-lambda.js
+│   │       ├── schedule-payouts/
+│   │       │   └── schedule-payouts-lambda.js
+│   │       └── event-consumer/
+│   │           └── event-consumer-lambda.js
+│   └── appsync-resolvers/
+│       └── payout/
+│           ├── get-maker-balance-resolver.js
+│           └── list-payouts-resolver.js
+└── utils/
+    ├── response-utils.ts
+    ├── validation-utils.ts
+    ├── commission-calculator.ts
+    ├── payout-publisher-client.ts
+    └── event-publisher.ts
+```
+
+### Data Layer Interaction Patterns
+
+#### Direct Data Access
+- **Maker Balances**: Direct DynamoDB access via `maker_balances` table using `maker_user_id` as partition key
+- **Payouts**: Direct DynamoDB access via `payouts` table using `payout_id` as partition key
+- **Earnings Transactions**: Direct DynamoDB access via `earnings_transactions` table using `maker_user_id` (PK) and `transaction_id` (SK)
+
+#### Query Patterns
+- **Get maker balance**: Single item read by `maker_user_id`
+- **List payouts by maker**: GSI query by `maker_user_id`
+- **List payouts by status**: GSI query by `status`
+- **List earnings by maker**: Query by `maker_user_id`
+- **List earnings by order**: GSI query by `order_id`
+- **List available earnings**: GSI query by `status` = "available"
+
+#### Write Patterns
+- **Create earnings transaction**: PutItem + UpdateItem for balance (DynamoDB transaction)
+- **Update earnings status**: UpdateItem with status transition validation
+- **Update maker balance**: UpdateItem with atomic increment operations
+- **Create payout**: PutItem with balance validation
+- **Update payout status**: UpdateItem with status transition validation
+
+### Business Logic Implementation
+
+#### Earnings Calculation
+- Earnings calculated when order is completed
+- Platform fee deducted from gross amount
+- Net amount = gross - platform fee
+- Earnings start in "pending" status
+- Hold period applied before earnings become available
+
+#### Commission Rules
+- Platform fee percentage configurable
+- Commission calculated via `commission-calculator.ts`
+- Commission rules can vary by maker tier
+- Commission deducted before earnings available
+
+#### Balance Management
+- Available balance = earnings available for payout
+- Pending balance = earnings in escrow/hold
+- Balance updates are atomic (DynamoDB transactions)
+- Balance cannot go negative (enforced)
+
+#### Payout Processing
+- Payouts processed through external payment publisher
+- Publisher integration via `payout-publisher-client.ts`
+- Failed payouts retried with exponential backoff
+- Payout status tracked: pending → processing → completed → failed
+
+#### Event Handling
+- **Event Consumer Lambda**: Processes events from other domains
+  - `OrderCompleted` → Triggers earnings calculation
+  - `PaymentCaptured` → Confirms funds received for earnings
+  - `MakerVerified` → May affect payout eligibility
+
+#### Data Consistency
+- Earnings creation uses DynamoDB transactions for atomicity
+- Balance updates are atomic and consistent
+- Payout creation validates available balance
+- Status transitions enforced with conditional writes
+
+#### Error Handling
+- Invalid order → Return 400 Bad Request
+- Insufficient balance → Return 400 Bad Request
+- Invalid payout method → Return 400 Bad Request
+- Payout publisher error → Return 502 Bad Gateway with retry
+- Payout not found → Return 404 Not Found
+- Unauthorized access → Return 403 Forbidden

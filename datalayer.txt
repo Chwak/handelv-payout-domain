@@ -1,0 +1,263 @@
+# Payout Domain - Data Layer Design
+
+**Purpose:** Money movement from platform to maker (earnings, commissions, payouts).
+
+**Database:** `payout_db`
+
+**CDK Stack:** `payout-stack`
+
+---
+
+## Tables
+
+### `maker_balances`
+
+**Partition Key:** `maker_user_id` (String)
+**Sort Key:** None
+
+**Attributes:**
+* `maker_user_id` (String, PK)
+* `available_balance` (Number) - Available for payout (in cents)
+* `pending_balance` (Number) - In escrow/hold (in cents)
+* `total_earned` (Number) - Lifetime earnings (in cents)
+* `total_paid_out` (Number) - Lifetime payouts (in cents)
+* `currency` (String) - "USD"
+* `updated_at` (String, ISO 8601)
+
+**GSI:** None
+
+**TTL:** None
+
+**Note:** This is an aggregate table. Updated via events from earnings transactions.
+
+---
+
+### `payouts`
+
+**Partition Key:** `payoutId` (String)
+**Sort Key:** None
+
+**Attributes:**
+* `maker_user_id` (String, PK)
+* `payout_id` (String, SK, UUID)
+* `amount` (Number) - Payout amount in cents
+* `currency` (String) - "USD"
+* `status` (String) - "pending" | "processing" | "completed" | "failed"
+* `payout_method` (String) - "bank_transfer" | "paypal" | "stripe_connect"
+* `payout_account_id` (String) - Reference to maker's payout account
+* `publisher_payout_id` (String, optional) - Stripe Connect payout ID
+* `scheduled_for` (String, ISO 8601) - When payout should be processed
+* `processed_at` (String, ISO 8601, optional)
+* `failure_reason` (String, optional)
+* `created_at` (String, ISO 8601)
+
+**GSI:**
+* `GSI1`: `makerUserId` (PK), `createdAt` (SK) - Maker payout history
+  * **Use Case:** Maker payout history
+* `GSI2`: `status` (PK), `createdAt` (SK) - Find payouts by status
+  * **Use Case:** Payout processing job, admin dashboard
+
+**TTL:** None
+
+---
+
+### `earnings`
+
+**Partition Key:** `makerUserId` (String)
+**Sort Key:** `transactionId` (String)
+
+**Attributes:**
+* `maker_user_id` (String, PK)
+* `order_id` (String, SK) - Reference to Order domain
+* `order_item_id` (String, optional) - Reference to specific order item
+* `gross_amount` (Number) - Gross earnings before commission (in cents)
+* `commission_amount` (Number) - Platform commission (in cents)
+* `net_amount` (Number) - Net earnings after commission (in cents)
+* `currency` (String) - "USD"
+* `commission_rate` (Number) - Commission rate as percentage (e.g., 10.0 for 10%)
+* `status` (String) - "pending" | "held" | "available" | "paid" | "refunded"
+* `held_until` (String, ISO 8601, optional) - When funds become available
+* `paid_at` (String, ISO 8601, optional) - When earnings were paid out
+* `payout_id` (String, optional) - Reference to payout that included this earning
+* `created_at` (String, ISO 8601)
+* `updated_at` (String, ISO 8601)
+
+**GSI:**
+* `GSI1`: `orderId` (PK), `createdAt` (SK) - All earnings for an order
+  * **Use Case:** Order earnings breakdown
+* `GSI2`: `status` (PK), `createdAt` (SK) - Earnings by status
+  * **Use Case:** Admin earnings dashboard, pending earnings
+
+**TTL:** None
+
+
+---
+
+## Payout Flow
+
+```
+Order Completed
+   ↓
+Earnings Transaction Created (pending)
+   ↓
+Hold Period (e.g., 7 days)
+   ↓
+Earnings Available (available)
+   ↓
+Payout Scheduled
+   ↓
+Earnings Paid Out (paid_out)
+```
+
+---
+
+## Query Patterns
+
+### Get Maker Balance
+**Table:** `maker_balances`
+**Operation:** GetItem
+**Key:** `maker_user_id`
+**Use Case:** Maker dashboard, payout page
+
+### Get Maker's Earnings
+**Table:** `earnings`
+**Operation:** Query
+**Key:** `maker_user_id`
+**Use Case:** Maker earnings history
+
+### Get Available Earnings for Payout
+**Table:** `earnings`
+**Operation:** Query on GSI1
+**Key:** `status = "available"`
+**Use Case:** Payout processing job
+
+### Get Maker's Payouts
+**Table:** `payouts`
+**Operation:** Query on GSI1
+**Key:** `makerUserId`
+**Use Case:** Maker payout history
+
+### Get Pending Payouts
+**Table:** `payouts`
+**Operation:** Query on GSI2
+**Key:** `status = "pending"`
+**Use Case:** Payout processing job
+
+---
+
+## Events Consumed
+
+This domain consumes events from other domains:
+
+* `OrderPaid` (from Order Domain)
+  * **Action:** Create `earnings` with status "pending"
+  * **Calculation:** 
+    * `gross_amount` = order total
+    * `commission_amount` = gross_amount * commission_rate (e.g., 10%)
+    * `net_amount` = gross_amount - commission_amount
+    * `held_until` = order_paid_at + hold_period (e.g., 7 days)
+
+* `OrderCompleted` (from Order Domain)
+  * **Action:** Mark earnings as "available" after hold period
+
+* `PaymentCaptured` (from Payment Domain)
+  * **Action:** Validate earnings against captured amount
+
+* `PaymentRefunded` (from Payment Domain)
+  * **Action:** Mark related earnings as "refunded" and adjust balances
+
+---
+
+## Events Published
+
+This domain publishes the following events to EventBridge:
+
+* `EarningsAccrued`
+  * `maker_user_id` (String)
+  * `transaction_id` (String)
+  * `order_id` (String)
+  * `net_amount` (Number)
+  * `available_at` (String, ISO 8601)
+
+* `EarningsAvailable`
+  * `maker_user_id` (String)
+  * `transaction_id` (String)
+  * `net_amount` (Number)
+  * `available_at` (String, ISO 8601)
+
+* `PayoutScheduled`
+  * `maker_user_id` (String)
+  * `payout_id` (String)
+  * `amount` (Number)
+  * `scheduled_for` (String, ISO 8601)
+
+* `PayoutCompleted`
+  * `maker_user_id` (String)
+  * `payout_id` (String)
+  * `amount` (Number)
+  * `processed_at` (String, ISO 8601)
+
+* `PayoutFailed`
+  * `maker_user_id` (String)
+  * `payout_id` (String)
+  * `failure_reason` (String)
+  * `failed_at` (String, ISO 8601)
+
+---
+
+## Design Considerations
+
+1. **Commission Structure:** Platform takes a percentage commission (e.g., 10%). Configurable per maker tier.
+
+2. **Hold Period:** Earnings held for a period (e.g., 7 days) before available for payout. Protects against chargebacks/refunds.
+
+3. **Balance Aggregation:** `maker_balances` is an aggregate table. Updated via events from `earnings`.
+
+4. **Payout Methods:** Makers can choose payout method (bank transfer, PayPal, Stripe Connect). Stored in separate payout accounts table (not shown).
+
+5. **Payout Scheduling:** Payouts can be scheduled (e.g., weekly, monthly) or on-demand.
+
+6. **Amount Storage:** All amounts stored in cents (integer) to avoid floating-point precision issues.
+
+---
+
+## Access Patterns
+
+### High Frequency
+* Get maker balance (maker dashboard)
+
+### Medium Frequency
+* Get maker's earnings (earnings history page)
+* Get maker's payouts (payout history page)
+
+### Low Frequency
+* Process payouts (scheduled job)
+* Create earnings transaction (via event)
+
+---
+
+## Data Consistency
+
+* **Eventually Consistent:** Balance updates via events. Typical delay: < 1 second.
+
+---
+
+## Next Steps
+
+1. **Create CDK stack** with DynamoDB tables
+2. **Set up Stripe Connect** (or payout publisher)
+3. **Set up EventBridge rules** for consumed/published events
+4. **Create Lambda functions** for:
+   * Earnings calculation (on order completion)
+   * Balance aggregation
+   * Payout scheduling
+   * Payout processing
+5. **Create scheduled job** (EventBridge rule + Lambda) for:
+   * Moving earnings from "pending" to "available" after hold period
+   * Processing scheduled payouts
+6. **Build API Gateway** endpoints:
+   * `GET /payouts/balance`
+   * `GET /payouts/earnings`
+   * `GET /payouts/history`
+   * `POST /payouts/request`
+   * `GET /payouts/{payout_id}`

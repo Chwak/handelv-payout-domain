@@ -1,0 +1,384 @@
+================================================================================
+PAYOUT DOMAIN - INPUT VALIDATION RULES
+================================================================================
+
+This document defines all input validation rules for the Payout Domain REST API.
+All API endpoints must validate inputs according to these rules before processing.
+
+================================================================================
+POST /payouts
+================================================================================
+
+Create Payout
+
+Request Body:
+- makerUserId: String (required)
+- amount: Number (required)
+- payoutMethod: String (required)
+
+Validation Rules:
+1. makerUserId:
+   - Must be a valid UUID or ID format
+   - Cannot be null or empty
+   - Must match authenticated user's ID
+   - Must reference an existing maker
+
+2. amount:
+   - Must be a positive number
+   - Minimum: 1.00 (minimum payout amount)
+   - Maximum: 100000.00 (maximum payout amount)
+   - Must have at most 2 decimal places
+   - Cannot be negative or zero
+   - Cannot exceed available balance
+
+3. payoutMethod:
+   - Must be one of: "bank_transfer", "paypal", "stripe"
+   - Case-sensitive
+   - Must be configured for maker
+
+Business Rules:
+- Maker must have sufficient available balance
+- Payout amount must be at least minimum payout amount
+- Payout method must be configured and verified
+- Payout is created in PENDING status
+- Available balance is reduced by payout amount
+- Pending balance is increased by payout amount
+
+Error Responses:
+- 400 Bad Request: Invalid input format
+- 401 Unauthorized: Not authenticated
+- 403 Forbidden: Cannot create payout (not maker, insufficient balance)
+- 404 Not Found: Maker or payout method not found
+- 422 Unprocessable Entity: Validation failed (amount exceeds balance, etc.)
+
+================================================================================
+POST /payouts/{payoutId}/process
+================================================================================
+
+Process Payout
+
+Path Parameters:
+- payoutId: String (required)
+
+Validation Rules:
+1. payoutId:
+   - Must be a valid UUID or ID format
+   - Cannot be null or empty
+   - Must reference an existing payout
+
+Business Rules:
+- Payout must exist
+- Payout must be in PENDING status
+- User must be admin or system (maker cannot process)
+- Payout status transitions to PROCESSING
+- Payout processing is initiated
+- Funds are transferred to payout method
+
+Error Responses:
+- 400 Bad Request: Invalid payoutId format
+- 401 Unauthorized: Not authenticated
+- 403 Forbidden: Cannot process payout
+- 404 Not Found: Payout not found
+- 409 Conflict: Payout not in PENDING status
+
+================================================================================
+GET /payouts/{payoutId}
+================================================================================
+
+Get Payout
+
+Path Parameters:
+- payoutId: String (required)
+
+Validation Rules:
+1. payoutId:
+   - Must be a valid UUID or ID format
+   - Cannot be null or empty
+
+Business Rules:
+- Payout must exist
+- User must be payout maker or admin
+
+Error Responses:
+- 400 Bad Request: Invalid payoutId format
+- 401 Unauthorized: Not authenticated
+- 403 Forbidden: Cannot access payout
+- 404 Not Found: Payout not found
+
+================================================================================
+GET /payouts
+================================================================================
+
+List Payouts
+
+Query Parameters:
+- makerUserId: String (optional)
+- status: String (optional)
+- limit: Number (optional, default: 20, max: 100)
+- nextToken: String (optional)
+
+Validation Rules:
+1. makerUserId (if provided):
+   - Must be a valid UUID or ID format
+   - Must match authenticated user's ID (unless admin)
+
+2. status (if provided):
+   - Must be one of: PENDING, PROCESSING, COMPLETED, FAILED
+   - Case-sensitive
+
+3. limit:
+   - Must be between 1 and 100
+   - Default: 20 if not provided
+   - Must be a positive integer
+
+4. nextToken:
+   - Must be a valid pagination token if provided
+
+Business Rules:
+- At least one filter (makerUserId, status) must be provided
+- User can only filter by their own makerUserId (unless admin)
+- Results filtered by provided criteria
+- Results sorted by createdAt descending (most recent first)
+
+Error Responses:
+- 400 Bad Request: Invalid input format
+- 401 Unauthorized: Not authenticated
+- 403 Forbidden: Cannot access other maker's payouts
+
+================================================================================
+GET /makers/{makerUserId}/balance
+================================================================================
+
+Get Maker Balance
+
+Path Parameters:
+- makerUserId: String (required)
+
+Validation Rules:
+1. makerUserId:
+   - Must be a valid UUID or ID format
+   - Cannot be null or empty
+   - Must match authenticated user's ID (unless admin)
+
+Business Rules:
+- Maker must exist
+- User can only view their own balance (unless admin)
+- Returns balance details:
+  * availableBalance: Available for payout
+  * pendingBalance: Pending payout
+  * totalEarnings: Total earnings
+  * totalPayouts: Total payouts
+
+Error Responses:
+- 400 Bad Request: Invalid makerUserId format
+- 401 Unauthorized: Not authenticated
+- 403 Forbidden: Cannot access other maker's balance
+- 404 Not Found: Maker not found
+
+================================================================================
+GET /makers/{makerUserId}/earnings
+================================================================================
+
+List Earnings
+
+Path Parameters:
+- makerUserId: String (required)
+
+Query Parameters:
+- limit: Number (optional, default: 20, max: 100)
+- nextToken: String (optional)
+- startDate: String (optional, ISO 8601 date)
+- endDate: String (optional, ISO 8601 date)
+
+Validation Rules:
+1. makerUserId:
+   - Must be a valid UUID or ID format
+   - Cannot be null or empty
+   - Must match authenticated user's ID (unless admin)
+
+2. limit:
+   - Must be between 1 and 100
+   - Default: 20 if not provided
+
+3. nextToken:
+   - Must be a valid pagination token if provided
+
+4. startDate (if provided):
+   - Must be valid ISO 8601 date
+   - Cannot be in the future
+   - Must be before endDate if both provided
+
+5. endDate (if provided):
+   - Must be valid ISO 8601 date
+   - Cannot be in the future
+   - Must be after startDate if both provided
+
+Business Rules:
+- Maker must exist
+- User can only view their own earnings (unless admin)
+- Results filtered by date range if provided
+- Results sorted by createdAt descending (most recent first)
+
+Error Responses:
+- 400 Bad Request: Invalid input format
+- 401 Unauthorized: Not authenticated
+- 403 Forbidden: Cannot access other maker's earnings
+- 404 Not Found: Maker not found
+
+================================================================================
+POST /payouts/schedule
+================================================================================
+
+Schedule Payouts
+
+Request Body (optional):
+- makerUserId: String (optional)
+- amount: Number (optional)
+- scheduleType: String (optional)
+
+Validation Rules:
+1. makerUserId (if provided):
+   - Must be a valid UUID or ID format
+   - Must match authenticated user's ID (unless admin)
+
+2. amount (if provided):
+   - Must be a positive number
+   - Minimum: 1.00
+   - Maximum: 100000.00
+   - Must have at most 2 decimal places
+
+3. scheduleType (if provided):
+   - Must be one of: "weekly", "biweekly", "monthly"
+   - Case-sensitive
+
+Business Rules:
+- User must be admin or system
+- If makerUserId provided, schedules payout for specific maker
+- If no makerUserId, schedules payouts for all eligible makers
+- Payouts are scheduled based on schedule configuration
+- Minimum payout amount applies
+
+Error Responses:
+- 400 Bad Request: Invalid input format
+- 401 Unauthorized: Not authenticated
+- 403 Forbidden: Not authorized to schedule payouts
+
+================================================================================
+COMMON VALIDATION PATTERNS
+================================================================================
+
+1. Amount Validation:
+   - All amounts must be positive numbers
+   - Maximum 2 decimal places
+   - Range: 1.00 to 100000.00
+   - Cannot exceed available balance
+
+2. Payout Status Transitions:
+   - PENDING → PROCESSING (via process)
+   - PROCESSING → COMPLETED (via payout publisher)
+   - PROCESSING → FAILED (via payout publisher error)
+   - Cannot transition from COMPLETED or FAILED
+
+3. Balance Validation:
+   - Available balance must be non-negative
+   - Pending balance must be non-negative
+   - Total balance = available + pending
+   - Balance updates are atomic
+
+4. Authentication & Authorization:
+   - All endpoints require valid authentication token
+   - Makers can only access their own data
+   - Admins can access all data
+   - Payout processing requires admin/system access
+
+5. Rate Limiting:
+   - Create payout: 5 per hour per user
+   - Get balance: 100 per hour per user
+   - List payouts: 100 per hour per user
+   - List earnings: 100 per hour per user
+   - Schedule payouts: 10 per hour per admin
+
+================================================================================
+EARNINGS CALCULATION RULES
+================================================================================
+
+1. Earnings Accrual:
+   - Earnings accrue when order is COMPLETED
+   - Earnings = order total - platform commission
+   - Commission rate is configurable (default: 10%)
+   - Earnings are added to available balance
+
+2. Commission Calculation:
+   - Commission = order total * commission rate
+   - Commission rate can vary by maker tier (optional)
+   - Commission is deducted from earnings
+   - Commission is tracked separately
+
+3. Balance Updates:
+   - Available balance increases on earnings accrual
+   - Available balance decreases on payout creation
+   - Pending balance increases on payout creation
+   - Pending balance decreases on payout completion
+
+================================================================================
+PAYOUT PROCESSING RULES
+================================================================================
+
+1. Payout Eligibility:
+   - Maker must have minimum available balance
+   - Payout method must be configured
+   - Payout method must be verified
+   - Maker account must be active
+
+2. Payout Limits:
+   - Minimum payout: $1.00 (configurable)
+   - Maximum payout: $100,000.00 (configurable)
+   - Daily payout limit: $50,000.00 (configurable)
+   - Weekly payout limit: $200,000.00 (configurable)
+
+3. Payout Scheduling:
+   - Automatic payouts can be scheduled
+   - Weekly, biweekly, or monthly schedules
+   - Payouts process on schedule date
+   - Minimum balance must be met
+
+================================================================================
+CROSS-DOMAIN VALIDATION
+================================================================================
+
+1. Order Validation:
+   - Validate orders exist (read-only via SSM)
+   - Check order status is COMPLETED
+   - Verify order maker matches earnings maker
+   - Calculate earnings from order total
+
+2. Payment Validation:
+   - Validate payments are CAPTURED (via events)
+   - Verify payment amounts
+   - Check payment status
+
+3. Maker Validation:
+   - Validate makerUserId exists
+   - Check maker account is active
+   - Verify maker verification status (optional)
+
+================================================================================
+ERROR RESPONSE FORMAT
+================================================================================
+
+All validation errors should return structured error responses:
+
+{
+  "error": {
+    "code": "VALIDATION_ERROR",
+    "message": "Validation failed",
+    "details": {
+      "field": "amount",
+      "reason": "Amount exceeds available balance"
+    }
+  }
+}
+
+================================================================================
+END OF DOCUMENTATION
+================================================================================
