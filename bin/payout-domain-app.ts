@@ -2,6 +2,7 @@
 import "source-map-support/register";
 import * as cdk from "aws-cdk-lib";
 import { PayoutDomainStack } from "../lib/payout-domain-stack";
+import { PayoutDomainPipelineStack } from "../lib/payout-domain-pipeline-stack";
 
 const app = new cdk.App();
 
@@ -16,3 +17,27 @@ new PayoutDomainStack(app, `${environment}-${regionCode}-hand-made-payout-domain
   environment,
   regionCode,
 });
+
+// Domain-scoped pipeline infrastructure
+const managementAccountId = "567608120268";
+const devAccountId = "741429964649";
+const mimicProdAccountId = "329177708881";
+const prodAccountId = "021657748325";
+const githubConnectionArn = "arn:aws:codestar-connections:us-east-1:567608120268:connection/ef226671-d921-4f3e-9935-c5f2549ecb0d";
+
+new PayoutDomainPipelineStack(
+  app,
+  "PayoutDomainPipelineStack",
+  {
+    env: { account: managementAccountId, region: "us-east-1" },
+    domain: "payout-domain",
+    managementAccountId,
+    devAccountId,
+    mimicProdAccountId,
+    prodAccountId,
+    githubConnectionArn,
+    description: "Domain-scoped pipeline for payout-domain",
+  }
+);
+
+app.synth();
