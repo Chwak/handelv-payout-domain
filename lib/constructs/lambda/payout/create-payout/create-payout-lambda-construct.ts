@@ -1,5 +1,6 @@
 import * as cdk from 'aws-cdk-lib';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
+import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as stepfunctions from 'aws-cdk-lib/aws-stepfunctions';
@@ -14,7 +15,7 @@ export interface CreatePayoutLambdaConstructProps {
 }
 
 export class CreatePayoutLambdaConstruct extends Construct {
-  public readonly function: lambda.Function;
+  public readonly function: NodejsFunction;
 
   constructor(scope: Construct, id: string, props: CreatePayoutLambdaConstructProps) {
     super(scope, id);
@@ -57,17 +58,23 @@ export class CreatePayoutLambdaConstruct extends Construct {
       removalPolicy: props.removalPolicy ?? cdk.RemovalPolicy.DESTROY,
     });
 
-    const lambdaCodePath = path.join(__dirname, '../../../../functions/lambda/payout/create-payout');
-    this.function = new lambda.Function(this, 'CreatePayoutFunction', {
+    const lambdaCodePath = path.join(__dirname, '../../../../functions/lambda/payout/create-payout/create-payout-lambda.ts');
+    this.function = new NodejsFunction(this, 'CreatePayoutFunction', {
       functionName: `${props.environment}-${props.regionCode}-payout-domain-create-payout-lambda`,
       runtime: lambda.Runtime.NODEJS_22_X,
-      handler: 'create-payout-lambda.handler',
-      code: lambda.Code.fromAsset(lambdaCodePath),
+      handler: 'handler',
+      entry: lambdaCodePath,
       role,
       timeout: cdk.Duration.minutes(5),
       memorySize: 512,
       tracing: lambda.Tracing.DISABLED,
       logGroup,
+      bundling: {
+        minify: true,
+        sourceMap: false,
+        target: 'node22',
+        externalModules: ['@aws-sdk/*'],
+      },
       environment: {
         ENVIRONMENT: props.environment,
         REGION_CODE: props.regionCode,

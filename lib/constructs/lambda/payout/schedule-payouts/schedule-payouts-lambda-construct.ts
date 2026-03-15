@@ -1,5 +1,6 @@
 import * as cdk from 'aws-cdk-lib';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
+import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
@@ -18,7 +19,7 @@ export interface SchedulePayoutsLambdaConstructProps {
 }
 
 export class SchedulePayoutsLambdaConstruct extends Construct {
-  public readonly function: lambda.Function;
+  public readonly function: NodejsFunction;
   public readonly scheduleRule?: events.Rule;
 
   constructor(scope: Construct, id: string, props: SchedulePayoutsLambdaConstructProps) {
@@ -71,17 +72,23 @@ export class SchedulePayoutsLambdaConstruct extends Construct {
       removalPolicy: props.removalPolicy ?? cdk.RemovalPolicy.DESTROY,
     });
 
-    const lambdaCodePath = path.join(__dirname, '../../../../functions/lambda/payout/schedule-payouts');
-    this.function = new lambda.Function(this, 'SchedulePayoutsFunction', {
+    const lambdaCodePath = path.join(__dirname, '../../../../functions/lambda/payout/schedule-payouts/schedule-payouts-lambda.ts');
+    this.function = new NodejsFunction(this, 'SchedulePayoutsFunction', {
       functionName: `${props.environment}-${props.regionCode}-payout-domain-schedule-payouts-lambda`,
       runtime: lambda.Runtime.NODEJS_22_X,
-      handler: 'schedule-payouts-lambda.handler',
-      code: lambda.Code.fromAsset(lambdaCodePath),
+      handler: 'handler',
+      entry: lambdaCodePath,
       role,
       timeout: cdk.Duration.minutes(5), // Longer timeout for batch processing
       memorySize: 512, // More memory for processing multiple payouts
       tracing: lambda.Tracing.DISABLED,
       logGroup,
+      bundling: {
+        minify: true,
+        sourceMap: false,
+        target: 'node22',
+        externalModules: ['@aws-sdk/*'],
+      },
       environment: {
         ENVIRONMENT: props.environment,
         REGION_CODE: props.regionCode,
