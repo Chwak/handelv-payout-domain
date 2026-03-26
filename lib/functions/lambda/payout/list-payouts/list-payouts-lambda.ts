@@ -14,11 +14,17 @@ function getMakerUserId(event: {
 }): string | null {
   const claims = event.requestContext?.authorizer?.claims as Record<string, unknown> | undefined;
   if (!isAuthorizedForMode(claims, 'maker')) return null;
-  const fromPath = event.pathParameters?.makerUserId;
-  if (typeof fromPath === 'string' && fromPath.trim()) return fromPath.trim();
   const sub = event.requestContext?.authorizer?.claims?.sub;
-  if (typeof sub === 'string' && sub.trim()) return sub.trim();
-  return null;
+  const authUserId = typeof sub === 'string' && sub.trim() ? sub.trim() : null;
+  if (!authUserId) return null;
+
+  const fromPath = event.pathParameters?.makerUserId;
+  if (typeof fromPath === 'string' && fromPath.trim()) {
+    const requested = fromPath.trim();
+    return requested === authUserId ? requested : null;
+  }
+
+  return authUserId;
 }
 
 function getLimit(event: { queryStringParameters?: { limit?: string } | null }): number {

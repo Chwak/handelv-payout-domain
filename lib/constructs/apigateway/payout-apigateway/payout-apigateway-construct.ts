@@ -44,7 +44,7 @@ export class PayoutApiGatewayConstruct extends Construct {
       deployOptions: {
         stageName: 'prod',
         loggingLevel: apigateway.MethodLoggingLevel.INFO,
-        dataTraceEnabled: true,
+        dataTraceEnabled: false,
       },
       defaultCorsPreflightOptions: {
         allowOrigins: ['http://localhost:3000', 'https://localhost:3000'],
