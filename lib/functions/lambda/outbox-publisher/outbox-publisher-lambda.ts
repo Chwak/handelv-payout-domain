@@ -1,5 +1,5 @@
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
-import { DynamoDBDocumentClient, QueryCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
+import { DynamoDBDocumentClient, QueryCommand, UpdateCommand, BatchGetCommand } from "@aws-sdk/lib-dynamodb";
 import { EventBridgeClient, PutEventsCommand, PutEventsRequestEntry } from "@aws-sdk/client-eventbridge";
 import { GlueClient, GetSchemaVersionCommand } from "@aws-sdk/client-glue";
 import * as crypto from "crypto";
@@ -76,19 +76,33 @@ export const handler = async (...args: unknown[]): Promise<void> => {
   if (!OUTBOX_TABLE_NAME || !EVENT_BUS_NAME || !DOMAIN_NAME) throw new Error("Missing env");
   if (!SCHEMA_REGISTRY_NAME) throw new Error("Schema registry not configured");
   try {
-    const threshold = new Date(Date.now() - PENDING_THRESHOLD_MINUTES * 60 * 1000).toISOString();
-    const queryResult = await dynamoDb.send(new QueryCommand({
-      TableName: OUTBOX_TABLE_NAME,
-      IndexName: "GSI-StatusCreatedAt",
-      KeyConditionExpression: "#status = :ps AND #ca < :th",
-      ExpressionAttributeNames: {"#status": "status", "#ca": "createdAt"},
-      ExpressionAttributeValues: {":ps": "PENDING", ":th": threshold},
-      Limit: BATCH_SIZE,
-    }));
-    const events = (queryResult.Items || []) as OutboxEvent[];
+    const input = (args[0] ?? {}) as Record<string, unknown>;
+    const streamEventIds = extractPendingEventIdsFromStream(input);
+    const directEventIds = Array.isArray(input.eventIds)
+      ? input.eventIds.filter((id): id is string => typeof id === "string" && id.length > 0)
+      : [];
+    const eventIds = [...new Set([...streamEventIds, ...directEventIds])];
+
+    let events: OutboxEvent[] = [];
+    if (eventIds.length > 0) {
+      console.log(`Stream/direct trigger received ${eventIds.length} eventIds`);
+      events = await getPendingEventsByIds(eventIds);
+      console.log(`Loaded ${events.length} PENDING outbox events by eventId`);
+    } else {
+      const threshold = new Date(Date.now() - PENDING_THRESHOLD_MINUTES * 60 * 1000).toISOString();
+      const queryResult = await dynamoDb.send(new QueryCommand({
+        TableName: OUTBOX_TABLE_NAME,
+        IndexName: "GSI-StatusCreatedAt",
+        KeyConditionExpression: "#status = :ps AND #ca < :th",
+        ExpressionAttributeNames: {"#status": "status", "#ca": "createdAt"},
+        ExpressionAttributeValues: {":ps": "PENDING", ":th": threshold},
+        Limit: BATCH_SIZE,
+      }));
+      events = (queryResult.Items || []) as OutboxEvent[];
+    }
     if (events.length === 0) return;
     const putRequests: PutEventsRequestEntry[] = [];
-    const eventIds: string[] = [];
+    const preparedEventIds: string[] = [];
     for (const e of events) {
       const payload = typeof e.payload === "string" ? JSON.parse(e.payload) : e.payload;
       const eventType = e.eventType || e.eventName;
@@ -117,11 +131,11 @@ export const handler = async (...args: unknown[]): Promise<void> => {
         EventBusName: EVENT_BUS_NAME,
         TraceHeader: traceContext.traceparent,
       });
-      eventIds.push(e.eventId);
+      preparedEventIds.push(e.eventId);
     }
     for (let i = 0; i < putRequests.length; i += 10) {
       const batch = putRequests.slice(i, i + 10);
-      const ids = eventIds.slice(i, i + 10);
+      const ids = preparedEventIds.slice(i, i + 10);
       const resp = await eventBridge.send(new PutEventsCommand({Entries: batch}));
       for (let j = 0; j < ids.length; j++) {
         const e = resp.Entries?.[j];
@@ -137,6 +151,35 @@ export const handler = async (...args: unknown[]): Promise<void> => {
     throw err;
   }
 };
+
+function extractPendingEventIdsFromStream(event: Record<string, unknown>): string[] {
+  const records = Array.isArray(event.Records) ? event.Records : [];
+  const eventIds: string[] = [];
+  for (const record of records) {
+    const r = record as {
+      eventName?: string;
+      dynamodb?: { NewImage?: { eventId?: { S?: string }; status?: { S?: string } } };
+    };
+    if (r.eventName !== "INSERT" && r.eventName !== "MODIFY") continue;
+    const status = r.dynamodb?.NewImage?.status?.S;
+    const eventId = r.dynamodb?.NewImage?.eventId?.S;
+    if (status === "PENDING" && eventId) eventIds.push(eventId);
+  }
+  return eventIds;
+}
+
+async function getPendingEventsByIds(eventIds: string[]): Promise<OutboxEvent[]> {
+  const keys = eventIds.map((eventId) => ({ eventId }));
+  const result = await dynamoDb.send(new BatchGetCommand({
+    RequestItems: {
+      [OUTBOX_TABLE_NAME]: {
+        Keys: keys,
+      },
+    },
+  }));
+  const items = (result.Responses?.[OUTBOX_TABLE_NAME] || []) as OutboxEvent[];
+  return items.filter((item) => item.status === "PENDING");
+}
 
 async function markSent(eventId: string): Promise<void> {
   const exp = Math.floor(Date.now() / 1000) + 86400;
@@ -155,10 +198,23 @@ async function incrementRetry(eventId: string, code: string): Promise<void> {
     await dynamoDb.send(new UpdateCommand({
       TableName: OUTBOX_TABLE_NAME,
       Key: {eventId},
-      UpdateExpression: "SET #r = if_not_exists(#r, :z) + :one, #le = :err, #e = :exp, #s = if(#r >= :max, :failed, #s)",
-      ExpressionAttributeNames: {"#r": "retries", "#le": "lastError", "#e": "expiresAt", "#s": "status"},
-      ExpressionAttributeValues: {":z": 0, ":one": 1, ":err": `${code}@${new Date().toISOString()}`, ":exp": exp, ":max": MAX_RETRIES, ":failed": "FAILED"},
+      UpdateExpression: "SET #r = if_not_exists(#r, :z) + :one, #le = :err, #e = :exp",
+      ExpressionAttributeNames: {"#r": "retries", "#le": "lastError", "#e": "expiresAt"},
+      ExpressionAttributeValues: {":z": 0, ":one": 1, ":err": `${code}@${new Date().toISOString()}`, ":exp": exp},
     }));
+
+    await dynamoDb.send(new UpdateCommand({
+      TableName: OUTBOX_TABLE_NAME,
+      Key: {eventId},
+      UpdateExpression: "SET #s = :failed, #e = :exp",
+      ConditionExpression: "#r >= :max AND #s = :pending",
+      ExpressionAttributeNames: {"#r": "retries", "#s": "status", "#e": "expiresAt"},
+      ExpressionAttributeValues: {":max": MAX_RETRIES, ":failed": "FAILED", ":pending": "PENDING", ":exp": exp},
+    })).catch((err) => {
+      if ((err as { name?: string })?.name !== "ConditionalCheckFailedException") {
+        throw err;
+      }
+    });
   } catch (e) {}
 }
 

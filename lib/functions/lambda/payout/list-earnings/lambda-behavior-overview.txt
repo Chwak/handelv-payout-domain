@@ -1,0 +1,29 @@
+HANDLER: list-earnings-lambda.ts
+
+PRIMARY LOGIC
+REST list for maker balances history: verifies maker claims + optional path makerUserId must equal JWT sub (same helper pattern as sibling REST handlers). Queries EARNINGS_TABLE with KeyCondition makerUserId = :uid with Limit from query parameter clamped [1..100]; base64url nextToken wraps ExclusiveStartKey JSON; invalid paging token silently ignored (drops to first page semantics).
+
+PROS
+Indexed Query—no scans; consistent auth pattern with list-payouts; caps page size abuse.
+
+CONS
+Invalid nextToken swallowed—can confuse paginating clients silently returning duplicate first page slices.
+
+SECURITY
+Financial listing restricted to authenticated maker slice.
+
+PERFORMANCE
+Paginated Dynamo Query—scales with partition size.
+
+FURTHER IMPROVEMENTS
+- Return 400 when nextToken malformed.
+- ProjectionExpression to omit internal-only attributes if added later.
+
+EXPOSES SENSITIVE INFORMATION
+PARTIAL — Earning line items expose order linkage and payout math components to maker.
+
+USER-FACING
+YES — REST ledger/history browsing.
+
+EDGE CASES
+PARTIAL — No items returns empty items array; malformed limit falls back DEFAULT_LIMIT 20.

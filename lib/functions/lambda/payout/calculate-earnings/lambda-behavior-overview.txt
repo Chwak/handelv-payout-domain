@@ -1,0 +1,29 @@
+HANDLER: calculate-earnings-lambda.ts
+
+PRIMARY LOGIC
+Internal-style handler parses body JSON or raw EventBridge-style detail/order payload for orderId, makerUserId, platformFeePercent, availableAt (default now). Loads order from ORDERS_TABLE; requires status COMPLETED and maker matches order fields (makerUserId or legacy sellerId). Computes fee and net from totalAmount (or amount fallback), writes an EARNINGS_TABLE row (pending) keyed by makerUserId + generated transactionId, and ADD increments maker MAKER_BALANCES_TABLE pendingBalance and totalEarned by netAmount. Returns projection of the earning record.
+
+PROS
+Centralizes payout math server-side from completed orders; clamps fee percent bounds on parse; rejects non-completed orders.
+
+CONS
+No idempotency keyed on orderId—duplicate invokes create duplicate earning rows and double-count balances. Uses global crypto.randomUUID without importing node:crypto (relies on Node runtime global).
+
+SECURITY
+Trusted caller assumed (no Cognito)—must gate via IAM/EventBridge/AppSync/AppConfig; exposure means forged earnings. Sensitive financial data in Dynamo responses.
+
+PERFORMANCE
+Sequential Get + Put + Update—acceptable for asynchronous revenue events.
+
+FURTHER IMPROVEMENTS
+- Conditional Put on synthetic idempotency key `orderId#maker` or use TransactWrite with condition attribute_not_exists.
+- Explicit import crypto from `node:crypto` for typings/clarity.
+
+EXPOSES SENSITIVE INFORMATION
+YES — Outputs gross/net/fee and ties to orders; Dynamo items persist financial totals (internal/consume carefully).
+
+USER-FACING
+INDIRECT — Invoked by platform automation when marking orders payable, not generic mobile resolver as written.
+
+EDGE CASES
+PARTIAL — Order shape variance (sellerId vs makerUserId); amount fields inconsistent naming; malformed event returns Invalid input format; replay duplicates balances.

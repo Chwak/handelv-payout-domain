@@ -1,0 +1,28 @@
+HANDLER: outbox-publisher-lambda.ts
+
+PRIMARY LOGIC
+Payout-domain Dynamo outbox republisher aligning with collector/maker implementations: gathers PENDING payout-related outbox rows (by staleness queries or targeted ids/streams depending on invocation), Glue schema-validates outbound EventBridge payloads, publishes PutEvents batches, transitions rows to SENT with TTL bookkeeping, increments retries with eventual FAILED escalation when thresholds exceeded.
+
+PROS
+Guarantees asynchronous domain signals for treasury/settlement integrations survive writer crashes once outbox persisted.
+
+CONS
+Shared duplicated code path—risk attribute drift versus writers emitting `retryCount` vs `retries`.
+
+SECURITY
+Highly privileged IAM; events may reference maker financial states—sanitize logging.
+
+PERFORMANCE
+Batch-oriented Glue-cached validations.
+
+FURTHER IMPROVEMENTS
+- Consolidate publisher implementation once across domains via internal package.
+
+EXPOSES SENSITIVE INFORMATION
+PARTIAL — Event payloads can include monetary metadata for consumers—not public REST.
+
+USER-FACING
+INDIRECT — Background reliability glue.
+
+EDGE CASES
+PARTIAL — Schema validation failures increment retries; orphaned PENDING stuck until TTL or manual replay.

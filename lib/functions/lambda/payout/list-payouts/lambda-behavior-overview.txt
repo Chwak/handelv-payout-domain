@@ -1,0 +1,29 @@
+HANDLER: list-payouts-lambda.ts
+
+PRIMARY LOGIC
+Same REST auth + paging pattern as list-earnings but reads PAYOUTS_TABLE via GSI1-MakerUserId key condition on makerUserId; encodes Dynamo LastEvaluatedKeysame base64url scheme; returns JSON {items, nextToken}.
+
+PROS
+Leverages explicit GSI for chronology/sort depending on schema; maker-only guard.
+
+CONS
+Silent degradation on corrupt nextToken mirrors list-earnings footgun.
+
+SECURITY
+Historical payout statuses and amounts are confidential—JWT-only access.
+
+PERFORMANCE
+Query per page; preferable to scans.
+
+FURTHER IMPROVEMENTS
+- Structured error when pagination token unparsable.
+- Filtering by payout status optional query parameter if UX needs.
+
+EXPOSES SENSITIVE INFORMATION
+PARTIAL — Past payout IDs/amounts/method summaries as stored in Dynamo.
+
+USER-FACING
+YES — REST payout history.
+
+EDGE CASES
+PARTIAL — If GSI misconfigured deployment fails loudly at CFN—not runtime-visible here beyond Dynamo errors bubbling as Lambda failure.

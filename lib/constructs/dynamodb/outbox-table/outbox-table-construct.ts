@@ -31,6 +31,7 @@ export class OutboxTableConstruct extends Construct {
       pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: props.environment === "prod" },
       encryption: dynamodb.TableEncryption.AWS_MANAGED,
       timeToLiveAttribute: "expiresAt",
+      stream: dynamodb.StreamViewType.NEW_IMAGE,
     });
 
     this.table.addGlobalSecondaryIndex({

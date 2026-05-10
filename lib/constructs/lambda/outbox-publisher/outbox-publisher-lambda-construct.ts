@@ -7,32 +7,33 @@ import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
 import * as events from "aws-cdk-lib/aws-events";
 import * as targets from "aws-cdk-lib/aws-events-targets";
 import * as cloudwatch from "aws-cdk-lib/aws-cloudwatch";
+import * as lambdaEventSources from "aws-cdk-lib/aws-lambda-event-sources";
 import { Construct } from "constructs";
 import * as path from "path";
 
-export interface RepublishLambdaConstructProps {
+export interface OutboxPublisherLambdaConstructProps {
   environment: string;
   regionCode: string;
   domainName: string;
   removalPolicy?: cdk.RemovalPolicy;
-  outboxTable: dynamodb.ITable;
+  outboxTable: dynamodb.Table;
   eventBus: events.IEventBus;
   schemaRegistryName: string;
   schedule?: events.Schedule;
 }
 
-export class RepublishLambdaConstruct extends Construct {
+export class OutboxPublisherLambdaConstruct extends Construct {
   public readonly function: NodejsFunction;
   public readonly scheduleRule: events.Rule;
   public readonly failedOutboxAlarm: cloudwatch.Alarm;
 
-  constructor(scope: Construct, id: string, props: RepublishLambdaConstructProps) {
+  constructor(scope: Construct, id: string, props: OutboxPublisherLambdaConstructProps) {
     super(scope, id);
 
-    const role = new iam.Role(this, "RepublishLambdaRole", {
-      roleName: `${props.environment}-${props.regionCode}-${props.domainName}-republish-lambda-role`,
+    const role = new iam.Role(this, "OutboxPublisherLambdaRole", {
+      roleName: `${props.environment}-${props.regionCode}-${props.domainName}-outbox-publisher-lambda-role`,
       assumedBy: new iam.ServicePrincipal("lambda.amazonaws.com"),
-      description: "IAM role for Republish Lambda (publish PENDING events to EventBridge)",
+      description: "IAM role for Outbox Publisher Lambda (publish PENDING events to EventBridge)",
       inlinePolicies: {
         CloudWatchLogsAccess: new iam.PolicyDocument({
           statements: [
@@ -46,8 +47,8 @@ export class RepublishLambdaConstruct extends Construct {
                 "logs:DescribeLogStreams",
               ],
               resources: [
-                `arn:aws:logs:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:log-group:/aws/lambda/${props.environment}-${props.regionCode}-${props.domainName}-republish-lambda`,
-                `arn:aws:logs:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:log-group:/aws/lambda/${props.environment}-${props.regionCode}-${props.domainName}-republish-lambda:log-stream:*`,
+                `arn:aws:logs:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:log-group:/aws/lambda/${props.environment}-${props.regionCode}-${props.domainName}-outbox-publisher-lambda`,
+                `arn:aws:logs:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:log-group:/aws/lambda/${props.environment}-${props.regionCode}-${props.domainName}-outbox-publisher-lambda:log-stream:*`,
               ],
             }),
           ],
@@ -84,16 +85,16 @@ export class RepublishLambdaConstruct extends Construct {
     props.outboxTable.grantReadWriteData(role);
     props.eventBus.grantPutEventsTo(role);
 
-    const logGroup = new logs.LogGroup(this, "RepublishLambdaLogGroup", {
-      logGroupName: `/aws/lambda/${props.environment}-${props.regionCode}-${props.domainName}-republish-lambda`,
+    const logGroup = new logs.LogGroup(this, "OutboxPublisherLambdaLogGroup", {
+      logGroupName: `/aws/lambda/${props.environment}-${props.regionCode}-${props.domainName}-outbox-publisher-lambda`,
       retention: logs.RetentionDays.ONE_WEEK,
       removalPolicy: props.removalPolicy ?? cdk.RemovalPolicy.DESTROY,
     });
 
-    const lambdaCodePath = path.join(__dirname, "../../../functions/lambda/republish-lambda/republish-lambda.ts");
+    const lambdaCodePath = path.join(__dirname, "../../../functions/lambda/outbox-publisher/outbox-publisher-lambda.ts");
 
-    this.function = new NodejsFunction(this, "RepublishFunction", {
-      functionName: `${props.environment}-${props.regionCode}-${props.domainName}-republish-lambda`,
+    this.function = new NodejsFunction(this, "OutboxPublisherFunction", {
+      functionName: `${props.environment}-${props.regionCode}-${props.domainName}-outbox-publisher-lambda`,
       runtime: lambda.Runtime.NODEJS_22_X,
       handler: "handler",
       entry: lambdaCodePath,
@@ -121,25 +122,47 @@ export class RepublishLambdaConstruct extends Construct {
         PENDING_THRESHOLD_MINUTES: "2",
         SCHEMA_REGISTRY_NAME: props.schemaRegistryName,
       },
-      description: "Republish Lambda: Publish PENDING outbox events to EventBridge (transactional outbox pattern)",
+      description: "Outbox Publisher Lambda: Publish PENDING outbox events to EventBridge (transactional outbox pattern)",
     });
 
     const schedule = props.schedule ?? events.Schedule.rate(cdk.Duration.minutes(10));
 
-    this.scheduleRule = new events.Rule(this, "RepublishScheduleRule", {
-      ruleName: `${props.environment}-${props.regionCode}-${props.domainName}-republish-rule`,
-      description: `Republish Lambda: Send PENDING events to EventBridge every 10 minutes (Safety Net for ${props.domainName})`,
+    this.scheduleRule = new events.Rule(this, "OutboxPublisherScheduleRule", {
+      ruleName: `${props.environment}-${props.regionCode}-${props.domainName}-outbox-publisher-rule`,
+      description: `Outbox Publisher Lambda: Send PENDING events to EventBridge every 10 minutes (Safety Net for ${props.domainName})`,
       schedule,
       enabled: true,
     });
 
     this.scheduleRule.addTarget(new targets.LambdaFunction(this.function));
 
-    this.failedOutboxAlarm = new cloudwatch.Alarm(this, "RepublishFailedAlarm", {
-      alarmName: `${props.environment}-${props.regionCode}-${props.domainName}-republish-failed-alarm`,
+    this.function.addEventSource(
+      new lambdaEventSources.DynamoEventSource(props.outboxTable, {
+        startingPosition: lambda.StartingPosition.LATEST,
+        batchSize: 50,
+        maxBatchingWindow: cdk.Duration.seconds(1),
+        retryAttempts: 3,
+        reportBatchItemFailures: true,
+        filters: [
+          lambda.FilterCriteria.filter({
+            eventName: ["INSERT"],
+            dynamodb: {
+              NewImage: {
+                status: {
+                  S: ["PENDING"],
+                },
+              },
+            },
+          }),
+        ],
+      }),
+    );
+
+    this.failedOutboxAlarm = new cloudwatch.Alarm(this, "OutboxPublisherFailedAlarm", {
+      alarmName: `${props.environment}-${props.regionCode}-${props.domainName}-outbox-publisher-failed-alarm`,
       metric: new cloudwatch.Metric({
         namespace: `HandMade/${props.domainName.charAt(0).toUpperCase() + props.domainName.slice(1)}/Outbox`,
-        metricName: "RepublishFailedCount",
+        metricName: "OutboxPublishFailedCount",
         statistic: cloudwatch.Statistic.SUM,
         period: cdk.Duration.minutes(1),
       }),

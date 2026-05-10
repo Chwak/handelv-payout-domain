@@ -1,0 +1,30 @@
+HANDLER: schedule-payouts-lambda.ts
+
+PRIMARY LOGIC
+Internal scheduled/batch Lambda: rejects API Gateway shaped invocations with HTTP 403 Not supported payload. Else scans MAKER_BALANCES_TABLE in pages of 25; for makers with finite availableBalance ≥ MIN_PAYOUT_THRESHOLD (constant 10) writes a PAYOUTS_TABLE item with randomized payoutId, amount equal to entire availableBalance snapshot, status SCHEDULED plus timestamps; tallies scheduledCount.
+
+PROS
+Simple operational automation for sweeping balances thresholded; guarded from accidental synchronous HTTP calls.
+
+CONS
+Full table Scan—cost scales with makers; scheduling does not decrement or lock balances here—risk double scheduling if rerun before downstream processor adjusts balances; no dedupe/idempotency per maker per day; concurrency if overlapping schedules.
+
+SECURITY
+Privileged job—IAM must deny public invoke; leakage of aggregated counts only via return value/logs.
+
+PERFORMANCE
+Potentially expensive hot path on large tables; chunked scan mitigates timeouts somewhat.
+
+FURTHER IMPROVEMENTS
+- Replace scan with ledger-driven index of eligible payouts.
+- Transact conditional balance reservation when inserting SCHEDULED payout.
+- Externalize MIN_PAYOUT_THRESHOLD env.
+
+EXPOSES SENSITIVE INFORMATION
+PARTIAL — Logs/scheduling side effects derive from balance scan (operational secrecy).
+
+USER-FACING
+INDIRECT — EventBridge/cron/internal operations only.
+
+EDGE CASES
+YES — Repeated runs can enqueue multiple SCHEDULED payouts referencing full balance without clearing availableBalance synchronously—financial correctness depends on downstream steps.

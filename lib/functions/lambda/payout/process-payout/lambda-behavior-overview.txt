@@ -1,0 +1,29 @@
+HANDLER: process-payout-lambda.ts
+
+PRIMARY LOGIC
+REST variant of synchronous Step Functions payout: requires payoutId path param, parses body with makerUserId/amount/payoutMethod, verifies authorizer claims maker mode AND body makerUserId equals JWT sub (403 mismatch), invokes same processPayout StartSyncExecution with traceparent propagation, maps SFN insufficient errors to HTTP 400, success returns payout details JSON with COMPLETED labeling.
+
+PROS
+Binds JWT identity to payout subject—prevents forging makerUserId in body versus create-payload path quirks; leverages orchestrated payouts.
+
+CONS
+getMakerUserId helper defined with dead logic (parses payoutId unrelated) leftover from scaffolding; exposes raw SFN error cause string on failures; ambiguous relation between path payoutId and generated workflow input (passes payoutId explicitly—must align with saga expectations).
+
+SECURITY
+JWT + equality check critical; mitigate info leakage via cause strings in 500 payloads.
+
+PERFORMANCE
+Sync Step Functions latency.
+
+FURTHER IMPROVEMENTS
+- Cleanup unused parsing helper portions.
+- Return structured machine output JSON instead of reconstructed static status.
+
+EXPOSES SENSITIVE INFORMATION
+PARTIAL — HTTP body communicates payout sizing and payoutMethod to client and SFN.
+
+USER-FACING
+YES — REST processing endpoint (likely admin or retries—depends on API mapping).
+
+EDGE CASES
+PARTIAL — Missing payoutId 400; auth vs body mismatch Forbidden; relies on substring detection for insufficient funds.

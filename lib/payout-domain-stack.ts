@@ -15,7 +15,7 @@ import { ListEarningsLambdaConstruct } from "./constructs/lambda/payout/list-ear
 import { CreatePayoutLambdaConstruct } from "./constructs/lambda/payout/create-payout/create-payout-lambda-construct";
 import { CalculateEarningsLambdaConstruct } from "./constructs/lambda/payout/calculate-earnings/calculate-earnings-lambda-construct";
 import { SchedulePayoutsLambdaConstruct } from "./constructs/lambda/payout/schedule-payouts/schedule-payouts-lambda-construct";
-import { RepublishLambdaConstruct } from "./constructs/lambda/republish/republish-lambda-construct";
+import { OutboxPublisherLambdaConstruct } from "./constructs/lambda/outbox-publisher/outbox-publisher-lambda-construct";
 
 export class PayoutDomainStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: DomainStackProps) {
@@ -71,7 +71,7 @@ export class PayoutDomainStack extends cdk.Stack {
       removalPolicy,
     });
 
-    new RepublishLambdaConstruct(this, "RepublishLambda", {
+    new OutboxPublisherLambdaConstruct(this, "OutboxPublisherLambda", {
       environment: props.environment,
       regionCode: props.regionCode,
       domainName: "payout-domain",

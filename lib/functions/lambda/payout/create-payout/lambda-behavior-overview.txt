@@ -1,0 +1,29 @@
+HANDLER: create-payout-lambda.ts
+
+PRIMARY LOGIC
+REST API Lambda (HTTP API + Cognito authorizer): verifies maker operation mode via isAuthorizedForMode, parses JSON body for positive amount and payoutMethod, generates payoutId/traceparent (W3C or random UUID pattern), invokes Step Functions synchronous execution START with payload {action:processPayout, makerUserId, amounts, payoutMethod, negativeAmount, publisherPayoutId, traceparent}; maps insufficient balance errors from SFN cause string to HTTP 400, other failures to 500, success to 201 with static status COMPLETED in response body.
+
+PROS
+Synchronous saga orchestration shields clients from Dynamo/stripe internals; validates maker-only mode; trims auth subject.
+
+CONS
+Response always advertises COMPLETED if SFN success without asserting intermediate states; error strings may leak Step Function causes to client on 500; returns 401 with message Invalid input format when auth fails (misleading).
+
+SECURITY
+Depends on API Gateway JWT validation + operation mode claims—must not expose STATE_MACHINE_ARN via errors. Sensitive payoutMethod handled in transit to SFN—lock down SFN IAM and logging.
+
+PERFORMANCE
+Sync SFN waits for workflow completion—increase latency vs async but simpler client semantics.
+
+FURTHER IMPROVEMENTS
+- Distinguished error payloads for auth vs bad body.
+- Return workflow output status instead of hard-coded COMPLETED.
+
+EXPOSES SENSITIVE INFORMATION
+PARTIAL — Client sees payoutId/amount/method in JSON; avoids raw bank secrets if SFN abstracts them.
+
+USER-FACING
+YES — REST endpoint for initiating payouts (authenticated maker).
+
+EDGE CASES
+PARTIAL — SFN timeouts surface as failures; malformed trace header replaced silently; insufficient balance heuristic matches substring Insufficient.

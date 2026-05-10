@@ -1,0 +1,28 @@
+HANDLER: get-maker-balance-lambda.ts
+
+PRIMARY LOGIC
+REST GET handler extracts maker authorization via isAuthorizedForMode(claims, maker), resolves makerUserId from path parameter matching auth sub OR defaults to self, performs Dynamo Get on MAKER_BALANCES_TABLE; returns defaulted zero balances + USD currency when absent, JSON body via API Gateway-compatible response envelope.
+
+PROS
+Strict path spoofing prevention (requested maker must equal token sub); sensible defaults hide missing aggregates from clients.
+
+CONS
+Throws Generic Internal server error on missing env (no structured API response wrapper in that branch—Lambda error).
+
+SECURITY
+Balances are sensitive—JWT + IAM must protect endpoint; exposing another maker’s totals blocked by equality check only if path supplied—otherwise returns own.
+
+PERFORMANCE
+Single Get.
+
+FURTHER IMPROVEMENTS
+- Harmonize HTTP error shaping with other payout REST Lambdas.
+
+EXPOSES SENSITIVE INFORMATION
+PARTIAL — Financial balances returned to authenticated maker only.
+
+USER-FACING
+YES — REST read for payout dashboard balances.
+
+EDGE CASES
+PARTIAL — path makerUserId mismatch yields null resolver then Invalid input format throw; absent row returns fabricated zeros vs explicit not-found distinction.
