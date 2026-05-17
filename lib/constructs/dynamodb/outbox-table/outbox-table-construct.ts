@@ -1,13 +1,16 @@
+/**
+ * Transactional outbox DynamoDB table for this domain. Self-contained — schema matches PLATFORM_DESIGN_CONTRACTS.txt.
+ * Publisher Lambdas read `GSI-StatusCreatedAt` for PENDING rows.
+ */
+
 import * as cdk from "aws-cdk-lib";
 import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
 import { Construct } from "constructs";
 
-/**
- * Transactional Outbox Table (Atomic Outbox Pattern)
- */
 export interface OutboxTableConstructProps {
   environment: string;
   regionCode: string;
+  /** e.g. "maker-domain", "order-domain" — becomes part of the physical table name */
   domainName: string;
   removalPolicy?: cdk.RemovalPolicy;
 }

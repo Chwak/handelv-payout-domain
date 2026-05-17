@@ -1,27 +1,10 @@
+import { getClaimsFromHttpApiEvent } from "../../../../utils/active-mode";
 import { SFNClient, StartSyncExecutionCommand } from '@aws-sdk/client-sfn';
 import { randomUUID } from 'crypto';
 import { initTelemetryLogger } from "../../../../utils/telemetry-logger";
 import { isAuthorizedForMode } from '../../../../utils/operation-mode-auth';
 
 const STATE_MACHINE_ARN = process.env.STATE_MACHINE_ARN;
-
-function getMakerUserId(event: {
-  pathParameters?: { payoutId?: string } | null;
-  requestContext?: { authorizer?: { claims?: { sub?: string } } };
-  body?: string | null;
-}): string | null {
-  const sub = event.requestContext?.authorizer?.claims?.sub;
-  if (typeof sub === 'string' && sub.trim()) return sub.trim();
-  if (event.body) {
-    try {
-      const o = JSON.parse(event.body) as Record<string, unknown>;
-      if (typeof o.makerUserId === 'string' && o.makerUserId.trim()) return o.makerUserId.trim();
-    } catch {
-      // ignore
-    }
-  }
-  return null;
-}
 
 function parseBody(event: { body?: string | null }): {
   makerUserId: string;
@@ -45,7 +28,7 @@ type ApiGatewayEvent = {
   pathParameters?: { payoutId?: string } | null;
   body?: string | null;
   headers?: Record<string, string | undefined>;
-  requestContext?: { authorizer?: { claims?: { sub?: string } } };
+  requestContext?: { authorizer?: unknown; identity?: unknown };
 };
 
 function resolveTraceparent(event: ApiGatewayEvent): string {
@@ -70,7 +53,7 @@ export const handler = async (event: ApiGatewayEvent) => {
     };
   }
 
-  const claims = event.requestContext?.authorizer?.claims as Record<string, unknown> | undefined;
+  const claims = getClaimsFromHttpApiEvent(event);
   if (!isAuthorizedForMode(claims, 'maker')) {
     return {
       statusCode: 401,

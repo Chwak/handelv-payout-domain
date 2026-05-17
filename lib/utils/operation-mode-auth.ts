@@ -1,26 +1,16 @@
 /**
- * Active mode authorization helpers for payout domain.
+ * Payout HTTP Lambdas — maker-only gates. Dual-capability users use the same
+ * ambiguous default as AppSync maker-primary domains (see ACTIVE_MODE_POLICY.txt under `hand-made-active-mode/` reference package in repo).
  */
+import {
+  isAuthorizedForMode as isAuthorizedForModeCore,
+  PLATFORM_DUAL_ROLE_DEFAULT_GRAPHQL,
+  type RequiredMode,
+} from "./active-mode";
 
-type ActiveMode = 'maker' | 'collector';
-type RequiredMode = ActiveMode | 'both';
-
-function isEnabled(value: unknown): boolean {
-  return value === true || value === 'true';
-}
-
-function resolveActiveMode(claims: Record<string, unknown> | undefined): ActiveMode | null {
-  const rawMode = claims?.active_mode;
-  if (rawMode === 'maker' || rawMode === 'collector') return rawMode;
-  const makerEnabled = isEnabled(claims?.maker_enabled);
-  const collectorEnabled = isEnabled(claims?.collector_enabled);
-  if (makerEnabled !== collectorEnabled) return makerEnabled ? 'maker' : 'collector';
-  if (makerEnabled && collectorEnabled) return 'collector';
-  return null;
-}
-
-export function isAuthorizedForMode(claims: Record<string, unknown> | undefined, required: RequiredMode): boolean {
-  const activeMode = resolveActiveMode(claims);
-  if (required === 'both') return activeMode !== null;
-  return activeMode === required;
+export function isAuthorizedForMode(
+  claims: Record<string, unknown> | undefined,
+  required: RequiredMode,
+): boolean {
+  return isAuthorizedForModeCore(claims, required, PLATFORM_DUAL_ROLE_DEFAULT_GRAPHQL);
 }

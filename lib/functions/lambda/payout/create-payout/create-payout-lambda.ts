@@ -1,19 +1,9 @@
 import { SFNClient, StartSyncExecutionCommand } from '@aws-sdk/client-sfn';
 import { randomUUID } from 'crypto';
 import { initTelemetryLogger } from "../../../../utils/telemetry-logger";
-import { isAuthorizedForMode } from '../../../../utils/operation-mode-auth';
+import { getMakerSubFromHttpApiEvent } from '../../../../utils/payout-http-maker-auth';
 
 const STATE_MACHINE_ARN = process.env.STATE_MACHINE_ARN;
-
-function getMakerUserId(event: {
-  requestContext?: { authorizer?: { claims?: { sub?: string } } };
-}): string | null {
-  const claims = event.requestContext?.authorizer?.claims as Record<string, unknown> | undefined;
-  if (!isAuthorizedForMode(claims, 'maker')) return null;
-  const sub = event.requestContext?.authorizer?.claims?.sub;
-  if (typeof sub === 'string' && sub.trim()) return sub.trim();
-  return null;
-}
 
 function parseBody(event: { body?: string | null }): { amount: number; payoutMethod: string } | null {
   if (!event.body) return null;
@@ -31,7 +21,7 @@ function parseBody(event: { body?: string | null }): { amount: number; payoutMet
 type ApiGatewayEvent = {
   body?: string | null;
   headers?: Record<string, string | undefined>;
-  requestContext?: { authorizer?: { claims?: { sub?: string } } };
+  requestContext?: { authorizer?: unknown; identity?: unknown };
 };
 
 function resolveTraceparent(event: ApiGatewayEvent): string {
@@ -56,7 +46,7 @@ export const handler = async (event: ApiGatewayEvent) => {
     };
   }
 
-  const makerUserId = getMakerUserId(event);
+  const makerUserId = getMakerSubFromHttpApiEvent(event);
   if (!makerUserId) {
     return {
       statusCode: 401,
